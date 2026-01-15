@@ -14,7 +14,8 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.chrome.options import Options
-import subprocess
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 from dotenv import load_dotenv
 
 # Load environment variables (Railway will provide env vars; .env is for local)
@@ -366,6 +367,7 @@ def send_notification(project):
 # ============================
 
 def initialize_driver():
+    """Initialize Chrome WebDriver with Railway/container support"""
     from selenium.webdriver.chrome.service import Service
 
     options = Options()
@@ -378,39 +380,43 @@ def initialize_driver():
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
-    options.add_argument("--disable-software-rasterizer")
-    options.add_argument("--disable-extensions")
-    options.add_argument("--disable-setuid-sandbox")
-    options.add_argument("--remote-debugging-port=9222")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
     options.add_argument("--window-size=1920,1080")
+    options.add_argument(
+        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 
-    # Sometimes helps in ephemeral containers
-    options.add_argument("--user-data-dir=/tmp/chrome-user-data")
-    options.add_argument("--data-path=/tmp/chrome-data")
-    options.add_argument("--disk-cache-dir=/tmp/chrome-cache")
-
-    # Explicit binary location (container)
-    if os.path.exists("/usr/bin/chromium"):
-        options.binary_location = "/usr/bin/chromium"
-    elif os.path.exists("/usr/bin/chromium-browser"):
-        options.binary_location = "/usr/bin/chromium-browser"
-
-    # Explicit chromedriver path (container)
+    # Try container paths first (for Docker/Railway), then webdriver-manager
     chromedriver_path = None
     for p in ["/usr/bin/chromedriver", "/usr/lib/chromium/chromedriver"]:
         if os.path.exists(p):
             chromedriver_path = p
             break
-    if not chromedriver_path:
-        raise RuntimeError("chromedriver not found in container")
-
-    # Enable chromedriver verbose log to stdout-ish (file)
-    service = Service(executable_path=chromedriver_path, log_output="/tmp/chromedriver.log")
-
-    print("✅ Chromium:", options.binary_location)
-    print("✅ Chromedriver:", chromedriver_path)
+    
+    if chromedriver_path:
+        # Container environment
+        print("✅ Using container chromedriver:", chromedriver_path)
+        
+        # Set Chromium binary if in container
+        if os.path.exists("/usr/bin/chromium"):
+            options.binary_location = "/usr/bin/chromium"
+        elif os.path.exists("/usr/bin/chromium-browser"):
+            options.binary_location = "/usr/bin/chromium-browser"
+            
+        service = Service(executable_path=chromedriver_path)
+    else:
+        # Local environment - use webdriver-manager
+        print("✅ Using webdriver-manager for chromedriver")
+        service = Service(ChromeDriverManager().install())
 
     driver = webdriver.Chrome(service=service, options=options)
+    
+    # Anti-detection
+    driver.execute_cdp_cmd('Network.setUserAgentOverride', {
+        "userAgent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    })
+    
     return driver
 
 
