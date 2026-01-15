@@ -376,16 +376,46 @@ def initialize_driver():
     if Config.HEADLESS:
         options.add_argument("--headless=new")
 
-    # Critical container flags
+    # Critical container flags - MUST HAVE for containerized Chrome
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
+    options.add_argument("--disable-software-rasterizer")
+    options.add_argument("--disable-extensions")
+    options.add_argument("--disable-setuid-sandbox")
+    options.add_argument("--single-process")  # Important for containers with limited resources
     options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option('useAutomationExtension', False)
     options.add_argument("--window-size=1920,1080")
-    options.add_argument(
-        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+    options.add_argument("--remote-debugging-port=9222")
+    
+    # Memory and stability options
+    options.add_argument("--disable-background-networking")
+    options.add_argument("--disable-background-timer-throttling")
+    options.add_argument("--disable-backgrounding-occluded-windows")
+    options.add_argument("--disable-breakpad")
+    options.add_argument("--disable-component-extensions-with-background-pages")
+    options.add_argument("--disable-features=TranslateUI,BlinkGenPropertyTrees")
+    options.add_argument("--disable-ipc-flooding-protection")
+    options.add_argument("--disable-renderer-backgrounding")
+    options.add_argument("--enable-features=NetworkService,NetworkServiceInProcess")
+    options.add_argument("--force-color-profile=srgb")
+    options.add_argument("--hide-scrollbars")
+    options.add_argument("--metrics-recording-only")
+    options.add_argument("--mute-audio")
+    
+    # User agent
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+    
+    # Anti-detection
+    options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
+    options.add_experimental_option('useAutomationExtension', False)
+    
+    # Preferences
+    prefs = {
+        "profile.default_content_setting_values.notifications": 2,
+        "profile.managed_default_content_settings.images": 2  # Disable images to save bandwidth
+    }
+    options.add_experimental_option("prefs", prefs)
 
     # Try container paths first (for Docker/Railway), then webdriver-manager
     chromedriver_path = None
@@ -401,8 +431,10 @@ def initialize_driver():
         # Set Chromium binary if in container
         if os.path.exists("/usr/bin/chromium"):
             options.binary_location = "/usr/bin/chromium"
+            print("✅ Chromium binary:", "/usr/bin/chromium")
         elif os.path.exists("/usr/bin/chromium-browser"):
             options.binary_location = "/usr/bin/chromium-browser"
+            print("✅ Chromium binary:", "/usr/bin/chromium-browser")
             
         service = Service(executable_path=chromedriver_path)
     else:
@@ -410,7 +442,9 @@ def initialize_driver():
         print("✅ Using webdriver-manager for chromedriver")
         service = Service(ChromeDriverManager().install())
 
+    print("🚀 Initializing Chrome driver...")
     driver = webdriver.Chrome(service=service, options=options)
+    print("✅ Chrome driver initialized successfully")
     
     # Anti-detection
     driver.execute_cdp_cmd('Network.setUserAgentOverride', {
