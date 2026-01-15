@@ -39,6 +39,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
+# Increase shared memory size for Chrome
+RUN mkdir -p /dev/shm && chmod 1777 /dev/shm
+
 # Set working directory
 WORKDIR /app
 

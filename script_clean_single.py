@@ -372,9 +372,9 @@ def initialize_driver():
 
     options = Options()
 
-    # Headless mode for containers
+    # Use old headless mode (more stable in containers)
     if Config.HEADLESS:
-        options.add_argument("--headless=new")
+        options.add_argument("--headless")
 
     # Critical container flags - MUST HAVE for containerized Chrome
     options.add_argument("--no-sandbox")
@@ -382,11 +382,8 @@ def initialize_driver():
     options.add_argument("--disable-gpu")
     options.add_argument("--disable-software-rasterizer")
     options.add_argument("--disable-extensions")
-    options.add_argument("--disable-setuid-sandbox")
-    options.add_argument("--single-process")  # Important for containers with limited resources
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--window-size=1920,1080")
-    options.add_argument("--remote-debugging-port=9222")
     
     # Memory and stability options
     options.add_argument("--disable-background-networking")
@@ -394,17 +391,20 @@ def initialize_driver():
     options.add_argument("--disable-backgrounding-occluded-windows")
     options.add_argument("--disable-breakpad")
     options.add_argument("--disable-component-extensions-with-background-pages")
-    options.add_argument("--disable-features=TranslateUI,BlinkGenPropertyTrees")
+    options.add_argument("--disable-features=TranslateUI")
     options.add_argument("--disable-ipc-flooding-protection")
     options.add_argument("--disable-renderer-backgrounding")
-    options.add_argument("--enable-features=NetworkService,NetworkServiceInProcess")
-    options.add_argument("--force-color-profile=srgb")
     options.add_argument("--hide-scrollbars")
     options.add_argument("--metrics-recording-only")
     options.add_argument("--mute-audio")
+    options.add_argument("--no-first-run")
+    options.add_argument("--no-default-browser-check")
+    options.add_argument("--disable-hang-monitor")
+    options.add_argument("--disable-prompt-on-repost")
+    options.add_argument("--disable-sync")
     
     # User agent
-    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+    options.add_argument("user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
     # Anti-detection
     options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
