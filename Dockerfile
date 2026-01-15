@@ -1,6 +1,5 @@
 FROM python:3.11-slim
 
-# Install system deps + Chromium + Chromedriver
 RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium \
     chromium-driver \
@@ -36,7 +35,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxss1 \
     libxtst6 \
     wget \
-    unzip \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -46,6 +44,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY script_clean_single.py .
 
-# Railway sets PORT sometimes; this is a worker so we don't expose.
-# Just run the script
+ENV PYTHONUNBUFFERED=1
 CMD ["python", "script_clean_single.py"]
