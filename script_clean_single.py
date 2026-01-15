@@ -419,24 +419,27 @@ def initialize_driver():
 
     # Try container paths first (for Docker/Railway), then webdriver-manager
     chromedriver_path = None
-    for p in ["/usr/bin/chromedriver", "/usr/lib/chromium/chromedriver"]:
-        if os.path.exists(p):
-            chromedriver_path = p
-            break
+    chrome_binary = None
     
-    if chromedriver_path:
-        # Container environment
-        print("✅ Using container chromedriver:", chromedriver_path)
+    # Check for Google Chrome (preferred)
+    if os.path.exists("/usr/bin/google-chrome"):
+        chrome_binary = "/usr/bin/google-chrome"
+        print("✅ Using Google Chrome:", chrome_binary)
+    elif os.path.exists("/usr/bin/chromium"):
+        chrome_binary = "/usr/bin/chromium"
+        print("✅ Using Chromium:", chrome_binary)
+    elif os.path.exists("/usr/bin/chromium-browser"):
+        chrome_binary = "/usr/bin/chromium-browser"
+        print("✅ Using Chromium browser:", chrome_binary)
+    
+    # Set binary location if found
+    if chrome_binary:
+        options.binary_location = chrome_binary
         
-        # Set Chromium binary if in container
-        if os.path.exists("/usr/bin/chromium"):
-            options.binary_location = "/usr/bin/chromium"
-            print("✅ Chromium binary:", "/usr/bin/chromium")
-        elif os.path.exists("/usr/bin/chromium-browser"):
-            options.binary_location = "/usr/bin/chromium-browser"
-            print("✅ Chromium binary:", "/usr/bin/chromium-browser")
-            
-        service = Service(executable_path=chromedriver_path)
+        # For Google Chrome, chromedriver is bundled
+        # webdriver-manager will handle it
+        print("✅ Using webdriver-manager for chromedriver")
+        service = Service(ChromeDriverManager().install())
     else:
         # Local environment - use webdriver-manager
         print("✅ Using webdriver-manager for chromedriver")
