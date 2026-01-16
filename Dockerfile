@@ -1,6 +1,7 @@
 # Use official Python runtime as base image
 FROM python:3.11-slim
 
+# Force rebuild - Updated Jan 16, 2026
 # Install wget and gnupg
 RUN apt-get update && apt-get install -y wget gnupg
 
