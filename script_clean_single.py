@@ -36,15 +36,17 @@ class Config:
     # Playwright session state (recommended over raw cookies)
     STORAGE_STATE_FILE = os.getenv("STORAGE_STATE_FILE", "catalant_state.json")
 
-    PROJECTS_DB = os.getenv("PROJECTS_DB", "seen_projects.json")
+    # Hard-coded PROJECTS_DB - always use seen_projects.json
+    PROJECTS_DB = "seen_projects.json"
+    
     CHECK_INTERVAL_SECONDS = int(os.getenv("CHECK_INTERVAL_SECONDS", "60"))
 
     # If you ever want images enabled, set DISABLE_IMAGES=false
     DISABLE_IMAGES = os.getenv("DISABLE_IMAGES", "True").lower() == "true"
 
-    # Increase these if the site is slow in cloud
-    NAV_TIMEOUT_MS = int(os.getenv("NAV_TIMEOUT_MS", "45000"))
-    ACTION_TIMEOUT_MS = int(os.getenv("ACTION_TIMEOUT_MS", "45000"))
+    # Increase these for cloud stability - higher defaults for Railway
+    NAV_TIMEOUT_MS = int(os.getenv("NAV_TIMEOUT_MS", "90000"))
+    ACTION_TIMEOUT_MS = int(os.getenv("ACTION_TIMEOUT_MS", "60000"))
 
 
 def validate_env():
@@ -153,23 +155,52 @@ def load_seen_projects():
     if not os.path.exists(Config.PROJECTS_DB):
         return []
     try:
-        with open(Config.PROJECTS_DB, "r") as f:
-            return json.load(f)
-    except Exception:
+        with open(Config.PROJECTS_DB, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            # Validate that data is a list of dictionaries
+            if not isinstance(data, list):
+                print("⚠️ Invalid format in seen_projects.json (not a list), resetting...")
+                return []
+            # Filter out any non-dict items
+            valid_projects = [p for p in data if isinstance(p, dict)]
+            if len(valid_projects) != len(data):
+                print(f"⚠️ Filtered out {len(data) - len(valid_projects)} invalid entries")
+            return valid_projects
+    except Exception as e:
+        print(f"⚠️ Failed to load projects: {e}")
         return []
 
 
 def save_seen_projects(projects):
     try:
-        with open(Config.PROJECTS_DB, "w") as f:
-            json.dump(projects, f, indent=2)
+        # Validate that we're saving a list of dicts
+        if not isinstance(projects, list):
+            print("⚠️ Cannot save: projects is not a list")
+            return
+        # Filter out any non-dict items before saving
+        valid_projects = [p for p in projects if isinstance(p, dict) and p.get("id")]
+        with open(Config.PROJECTS_DB, "w", encoding="utf-8") as f:
+            json.dump(valid_projects, f, indent=2, ensure_ascii=False)
     except Exception as e:
         print(f"⚠️ Failed to save projects: {e}")
 
 
 def filter_new_projects(all_projects, seen_projects):
-    seen_ids = {p.get("id") for p in seen_projects if p.get("id")}
-    return [p for p in all_projects if p.get("id") and p["id"] not in seen_ids]
+    # Defensive: ensure seen_projects is a list of dicts
+    if not isinstance(seen_projects, list):
+        print("⚠️ seen_projects is not a list, treating as empty")
+        seen_projects = []
+    
+    # Extract IDs, handling any non-dict items gracefully
+    seen_ids = set()
+    for p in seen_projects:
+        if isinstance(p, dict) and p.get("id"):
+            seen_ids.add(p["id"])
+        elif not isinstance(p, dict):
+            print(f"⚠️ Skipping invalid entry in seen_projects: {type(p).__name__}")
+    
+    # Filter new projects
+    return [p for p in all_projects if isinstance(p, dict) and p.get("id") and p["id"] not in seen_ids]
 
 
 # ============================
@@ -187,15 +218,12 @@ def _route_block_images(route, request):
 
 
 def is_logged_in(page) -> bool:
-    return page.locator(".need-card-inline-name").count() > 0
-
-
-def _safe_screenshot(page, name: str):
+    """Check if logged in, catching any Target crashed or page errors"""
     try:
-        page.screenshot(path=name, full_page=True)
-        print(f"🖼️ Saved screenshot: {name}")
-    except Exception:
-        pass
+        return page.locator(".need-card-inline-name").count() > 0
+    except Exception as e:
+        print(f"⚠️ is_logged_in check failed (possibly crashed): {e}")
+        return False
 
 
 def perform_login(page) -> bool:
@@ -206,7 +234,7 @@ def perform_login(page) -> bool:
     - OR there is a Continue/Next step before password
     """
     try:
-        page.goto(DASHBOARD_URL, wait_until="domcontentloaded", timeout=Config.NAV_TIMEOUT_MS)
+        page.goto(DASHBOARD_URL, wait_until="networkidle", timeout=Config.NAV_TIMEOUT_MS)
         page.wait_for_timeout(1500)
 
         email = page.locator('input[name="email"], #email-id').first
@@ -219,15 +247,20 @@ def perform_login(page) -> bool:
         except Exception:
             pass
 
-        is_readonly = bool(email.get_attribute("readonly"))
+        is_readonly = False
+        try:
+            is_readonly = bool(email.get_attribute("readonly"))
+        except Exception:
+            pass
 
         # Only set email if needed / possible
-        if (not is_readonly) or (current_val == ""):
+        if is_readonly and current_val:
+            print(f"ℹ️ Email is readonly and already set to: {current_val}")
+        else:
+            # Type email via keyboard for better reliability
             email.click(force=True, timeout=Config.ACTION_TIMEOUT_MS)
             page.keyboard.press("Control+A")
-            page.keyboard.type(Config.CATALANT_EMAIL, delay=25)
-        else:
-            print(f"ℹ️ Email is readonly and already set to: {current_val}")
+            page.keyboard.type(Config.CATALANT_EMAIL, delay=50)
 
         # If there is an email-first step
         if page.locator('button:has-text("Continue")').count() > 0:
@@ -241,9 +274,10 @@ def perform_login(page) -> bool:
         password = page.locator('input[name="password"]').first
         password.wait_for(timeout=Config.ACTION_TIMEOUT_MS)
 
+        # Type password via keyboard
         password.click(force=True, timeout=Config.ACTION_TIMEOUT_MS)
         page.keyboard.press("Control+A")
-        page.keyboard.type(Config.CATALANT_PASSWORD, delay=25)
+        page.keyboard.type(Config.CATALANT_PASSWORD, delay=50)
 
         # Submit
         if page.locator('button:has-text("Login")').count() > 0:
@@ -257,7 +291,6 @@ def perform_login(page) -> bool:
         return True
 
     except Exception as e:
-        _safe_screenshot(page, "login_failed.png")
         print(f"❌ Login failed: {e}")
         return False
 
@@ -265,9 +298,10 @@ def perform_login(page) -> bool:
 def setup_session(context, page) -> bool:
     """
     Uses storage_state if present; otherwise logs in and saves storage_state.
+    Catches Target crashed and navigation errors.
     """
     try:
-        page.goto(DASHBOARD_URL, wait_until="domcontentloaded", timeout=Config.NAV_TIMEOUT_MS)
+        page.goto(DASHBOARD_URL, wait_until="networkidle", timeout=Config.NAV_TIMEOUT_MS)
         page.wait_for_timeout(2500)
 
         if is_logged_in(page):
@@ -283,7 +317,11 @@ def setup_session(context, page) -> bool:
                 print(f"⚠️ Could not save storage_state: {e}")
         return ok
 
+    except PlaywrightTimeoutError as e:
+        print(f"❌ Session setup timeout: {e}")
+        return False
     except Exception as e:
+        # Catch "Target crashed" and other errors
         print(f"❌ Session setup failed: {e}")
         return False
 
@@ -363,7 +401,6 @@ def scan_for_projects(page) -> list[dict]:
         return projects
 
     except PlaywrightTimeoutError:
-        _safe_screenshot(page, "projects_timeout.png")
         print("⏳ Timeout waiting for projects")
         return []
     except Exception as e:
@@ -371,43 +408,51 @@ def scan_for_projects(page) -> list[dict]:
         return []
 
 
-def run_once():
+def run_once() -> bool:
+    """
+    Run one scrape cycle. Returns True on success, False on failure.
+    Catches Target crashed, navigation timeouts, and other errors.
+    """
     print("=" * 60)
     print(f"🔄 Cycle started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=Config.HEADLESS,
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--disable-extensions",
-                "--window-size=1920,1080",
-            ],
-        )
+    browser = None
+    context = None
+    page = None
+    
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=Config.HEADLESS,
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--disable-extensions",
+                    "--window-size=1920,1080",
+                ],
+            )
 
-        # Load storage state if present (keeps you logged in across restarts)
-        storage_state = Config.STORAGE_STATE_FILE if os.path.exists(Config.STORAGE_STATE_FILE) else None
+            # Load storage state if present (keeps you logged in across restarts)
+            storage_state = Config.STORAGE_STATE_FILE if os.path.exists(Config.STORAGE_STATE_FILE) else None
 
-        context = browser.new_context(
-            storage_state=storage_state,
-            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            viewport={"width": 1920, "height": 1080},
-        )
-        context.set_default_timeout(Config.ACTION_TIMEOUT_MS)
-        context.set_default_navigation_timeout(Config.NAV_TIMEOUT_MS)
+            context = browser.new_context(
+                storage_state=storage_state,
+                user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                viewport={"width": 1920, "height": 1080},
+            )
+            context.set_default_timeout(Config.ACTION_TIMEOUT_MS)
+            context.set_default_navigation_timeout(Config.NAV_TIMEOUT_MS)
 
-        if Config.DISABLE_IMAGES:
-            context.route("**/*", _route_block_images)
+            if Config.DISABLE_IMAGES:
+                context.route("**/*", _route_block_images)
 
-        page = context.new_page()
+            page = context.new_page()
 
-        try:
             if not setup_session(context, page):
                 print("❌ Failed to establish session")
-                return
+                return False
 
             seen_projects = load_seen_projects()
             print(f"📁 Loaded {len(seen_projects)} seen projects")
@@ -415,7 +460,8 @@ def run_once():
             all_projects = scan_for_projects(page)
             if not all_projects:
                 print("⚠️ No projects found (or page didn't load)")
-                return
+                # Not necessarily a failure - might just be empty
+                return True
 
             new_projects = filter_new_projects(all_projects, seen_projects)
 
@@ -432,35 +478,95 @@ def run_once():
                 print("⏳ No new projects")
 
             print(f"📊 Stats: {len(all_projects)} total, {len(seen_projects)} tracked")
+            return True
 
-        finally:
+    except PlaywrightTimeoutError as e:
+        print(f"❌ Navigation timeout: {e}")
+        return False
+    except Exception as e:
+        # Catch Target crashed and other errors
+        error_msg = str(e).lower()
+        if "target crashed" in error_msg or "connection closed" in error_msg:
+            print(f"❌ Browser/target crashed: {e}")
+        else:
+            print(f"❌ Cycle error: {e}")
+            traceback.print_exc()
+        return False
+    finally:
+        # Ensure proper cleanup in correct order
+        if page:
+            try:
+                page.close()
+            except Exception:
+                pass
+        
+        if context:
             try:
                 context.close()
             except Exception:
                 pass
+        
+        if browser:
             try:
                 browser.close()
             except Exception:
                 pass
-            print("✅ Browser closed")
+        
+        print("✅ Cleanup complete")
 
 
 def worker_loop(interval_seconds: int):
+    """
+    Main loop with exponential backoff on failures.
+    - Starts backoff at 120 seconds
+    - Doubles on each failure up to max 900 seconds
+    - Resets to 120 seconds on success
+    - On success, uses normal CHECK_INTERVAL_SECONDS
+    - On failure, waits current backoff delay
+    """
     print("🟢 Worker started (Playwright)")
-    print(f"⏱️ Interval: {interval_seconds}s")
+    print(f"⏱️ Normal interval: {interval_seconds}s ({interval_seconds // 60} minutes)")
+
+    backoff_seconds = 120
+    max_backoff = 900
+    consecutive_failures = 0
 
     while True:
         start = time.time()
+        success = False
 
         try:
-            run_once()
+            success = run_once()
         except Exception as e:
-            print(f"❌ Cycle crashed: {e}")
+            print(f"❌ Unexpected error in run_once: {e}")
             traceback.print_exc()
+            success = False
 
         elapsed = time.time() - start
-        sleep_for = max(0, interval_seconds - elapsed)
-        print(f"🕒 Sleeping {int(sleep_for)}s (cycle took {int(elapsed)}s)")
+
+        if success:
+            # Reset backoff on success
+            if consecutive_failures > 0:
+                print(f"✅ Success after {consecutive_failures} failure(s), resetting backoff")
+            consecutive_failures = 0
+            backoff_seconds = 120
+            
+            # Use normal interval
+            sleep_for = max(0, interval_seconds - elapsed)
+            sleep_minutes = sleep_for / 60
+            print(f"🕒 Sleeping {sleep_minutes:.1f} minutes (cycle took {int(elapsed)}s)")
+        else:
+            # Failure: use exponential backoff
+            consecutive_failures += 1
+            backoff_minutes = backoff_seconds / 60
+            print(f"⚠️ Failure #{consecutive_failures}, backing off for {backoff_minutes:.1f} minutes")
+            
+            sleep_for = backoff_seconds
+            
+            # Double backoff for next failure, cap at max_backoff
+            backoff_seconds = min(backoff_seconds * 2, max_backoff)
+
+        print("=" * 60 + "\n")
         time.sleep(sleep_for)
 
 
