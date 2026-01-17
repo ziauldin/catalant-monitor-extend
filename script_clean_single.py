@@ -426,33 +426,35 @@ def initialize_driver():
         chromedriver_path = "/usr/bin/chromedriver"
         print(f"✅ Using container chromedriver: {chromedriver_path}")
     
-    # Check for Google Chrome (preferred)
-    if os.path.exists("/usr/bin/google-chrome"):
-        chrome_binary = "/usr/bin/google-chrome"
-        print(f"✅ Chromium binary: {chrome_binary}")
-    elif os.path.exists("/usr/bin/google-chrome-stable"):
+    # Check for Google Chrome (ONLY - prefer stable over others)
+    if os.path.exists("/usr/bin/google-chrome-stable"):
         chrome_binary = "/usr/bin/google-chrome-stable"
-        print(f"✅ Chromium binary: {chrome_binary}")
-    elif os.path.exists("/usr/bin/chromium"):
-        chrome_binary = "/usr/bin/chromium"
-        print(f"✅ Chromium binary: {chrome_binary}")
-    elif os.path.exists("/usr/bin/chromium-browser"):
-        chrome_binary = "/usr/bin/chromium-browser"
-        print(f"✅ Chromium binary: {chrome_binary}")
+        print(f"✅ Chrome binary: {chrome_binary}")
+    elif os.path.exists("/usr/bin/google-chrome"):
+        chrome_binary = "/usr/bin/google-chrome"
+        print(f"✅ Chrome binary: {chrome_binary}")
+    else:
+        # Don't use chromium in container - causes crashes
+        print("⚠️ Google Chrome not found, using webdriver-manager")
     
     # Set binary location if found
     if chrome_binary:
         options.binary_location = chrome_binary
     
+    # Add verbose logging for debugging
+    service_args = ['--verbose', '--log-path=/tmp/chromedriver.log']
+    
     # Use container chromedriver if available, otherwise webdriver-manager
     if chromedriver_path:
-        service = Service(chromedriver_path)
+        service = Service(chromedriver_path, service_args=service_args)
     else:
         # webdriver-manager will handle it
         print("✅ Using webdriver-manager for chromedriver")
-        service = Service(ChromeDriverManager().install())
+        service = Service(ChromeDriverManager().install(), service_args=service_args)
 
     print("🚀 Initializing Chrome driver...")
+    print(f"   Chrome binary: {chrome_binary or 'default'}")
+    print(f"   ChromeDriver: {chromedriver_path or 'webdriver-manager'}")
     driver = webdriver.Chrome(service=service, options=options)
     print("✅ Chrome driver initialized successfully")
     
