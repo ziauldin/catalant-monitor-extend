@@ -15,6 +15,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
+
 from webdriver_manager.chrome import ChromeDriverManager
 from dotenv import load_dotenv
 
@@ -367,66 +368,50 @@ def send_notification(project):
 # ============================
 
 def initialize_driver():
-    """Initialize Chrome WebDriver with Railway/container support"""
-    from selenium.webdriver.chrome.service import Service
-
+    """Initialize Chrome WebDriver with Railway/container support (no chromedriver log file)"""
     options = Options()
 
-    # Use old headless mode (more stable in containers)
     if Config.HEADLESS:
-        options.add_argument("--headless")
+        # Prefer new headless where available
+        options.add_argument("--headless=new")
 
-    # Critical container flags - MUST HAVE for containerized Chrome
+    # Critical container flags
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--disable-software-rasterizer")
     options.add_argument("--disable-extensions")
-    options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--window-size=1920,1080")
-    
-    # Memory and stability options
-    options.add_argument("--disable-background-networking")
-    options.add_argument("--disable-background-timer-throttling")
-    options.add_argument("--disable-backgrounding-occluded-windows")
-    options.add_argument("--disable-breakpad")
-    options.add_argument("--disable-component-extensions-with-background-pages")
-    options.add_argument("--disable-features=TranslateUI")
-    options.add_argument("--disable-ipc-flooding-protection")
-    options.add_argument("--disable-renderer-backgrounding")
-    options.add_argument("--hide-scrollbars")
-    options.add_argument("--metrics-recording-only")
-    options.add_argument("--mute-audio")
+
+    # Keep it lightweight
     options.add_argument("--no-first-run")
     options.add_argument("--no-default-browser-check")
-    options.add_argument("--disable-hang-monitor")
-    options.add_argument("--disable-prompt-on-repost")
+    options.add_argument("--disable-background-networking")
     options.add_argument("--disable-sync")
-    
+    options.add_argument("--mute-audio")
+
     # User agent
-    options.add_argument("user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-    
-    # Anti-detection
-    options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
-    options.add_experimental_option('useAutomationExtension', False)
-    
-    # Preferences
+    options.add_argument(
+        "user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+
+    # Preferences (disable notifications + images)
     prefs = {
         "profile.default_content_setting_values.notifications": 2,
-        "profile.managed_default_content_settings.images": 2  # Disable images to save bandwidth
+        "profile.managed_default_content_settings.images": 2
     }
     options.add_experimental_option("prefs", prefs)
+    options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
+    options.add_experimental_option("useAutomationExtension", False)
 
-    # Try container paths first (for Docker/Railway), then webdriver-manager
     chromedriver_path = None
     chrome_binary = None
-    
-    # Check for chromedriver in container paths
+
     if os.path.exists("/usr/bin/chromedriver"):
         chromedriver_path = "/usr/bin/chromedriver"
         print(f"✅ Using container chromedriver: {chromedriver_path}")
-    
-    # Check for Google Chrome (ONLY - prefer stable over others)
+
+    # Prefer google-chrome if present
     if os.path.exists("/usr/bin/google-chrome-stable"):
         chrome_binary = "/usr/bin/google-chrome-stable"
         print(f"✅ Chrome binary: {chrome_binary}")
@@ -434,38 +419,31 @@ def initialize_driver():
         chrome_binary = "/usr/bin/google-chrome"
         print(f"✅ Chrome binary: {chrome_binary}")
     else:
-        # Don't use chromium in container - causes crashes
-        print("⚠️ Google Chrome not found, using webdriver-manager")
-    
-    # Set binary location if found
+        print("⚠️ Google Chrome not found, using webdriver-manager default browser")
+
     if chrome_binary:
         options.binary_location = chrome_binary
-    
-    # Add verbose logging for debugging
-    service_args = ['--verbose', '--log-path=/tmp/chromedriver.log']
-    
-    # Use container chromedriver if available, otherwise webdriver-manager
+
+    # IMPORTANT: remove verbose + log-path (prevents /tmp log growth on Railway)
     if chromedriver_path:
-        service = Service(chromedriver_path, service_args=service_args)
+        service = Service(chromedriver_path)
     else:
-        # webdriver-manager will handle it
         print("✅ Using webdriver-manager for chromedriver")
-        service = Service(ChromeDriverManager().install(), service_args=service_args)
+        service = Service(ChromeDriverManager().install())
 
     print("🚀 Initializing Chrome driver...")
-    print(f"   Chrome binary: {chrome_binary or 'default'}")
-    print(f"   ChromeDriver: {chromedriver_path or 'webdriver-manager'}")
     driver = webdriver.Chrome(service=service, options=options)
     print("✅ Chrome driver initialized successfully")
-    
-    # Anti-detection
-    driver.execute_cdp_cmd('Network.setUserAgentOverride', {
-        "userAgent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-    })
-    
+
+    # Light anti-detection tweak (safe)
+    try:
+        driver.execute_cdp_cmd("Network.setUserAgentOverride", {
+            "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        })
+    except Exception:
+        pass
+
     return driver
-
-
 
 
 # ============================
