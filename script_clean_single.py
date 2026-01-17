@@ -48,6 +48,10 @@ class Config:
     NAV_TIMEOUT_MS = int(os.getenv("NAV_TIMEOUT_MS", "90000"))
     ACTION_TIMEOUT_MS = int(os.getenv("ACTION_TIMEOUT_MS", "60000"))
 
+    # Watchdog: planned restart to prevent long-running Railway memory issues
+    WATCHDOG_RESTART_SECONDS = int(os.getenv("WATCHDOG_RESTART_SECONDS", "14400"))  # 4 hours
+    WATCHDOG_MAX_CYCLES = int(os.getenv("WATCHDOG_MAX_CYCLES", "0"))  # 0 = disabled
+
 
 def validate_env():
     missing = []
@@ -526,13 +530,24 @@ def worker_loop(interval_seconds: int):
     """
     print("🟢 Worker started (Playwright)")
     print(f"⏱️ Normal interval: {interval_seconds}s ({interval_seconds // 60} minutes)")
+    
+    # Watchdog tracking
+    start_time = time.time()
+    cycle_count = 0
+    
+    if Config.WATCHDOG_RESTART_SECONDS > 0:
+        restart_hours = Config.WATCHDOG_RESTART_SECONDS / 3600
+        print(f"⏰ Watchdog: will restart after {restart_hours:.1f} hours uptime")
+    
+    if Config.WATCHDOG_MAX_CYCLES > 0:
+        print(f"⏰ Watchdog: will restart after {Config.WATCHDOG_MAX_CYCLES} cycles")
 
     backoff_seconds = 120
     max_backoff = 900
     consecutive_failures = 0
 
     while True:
-        start = time.time()
+        cycle_start = time.time()
         success = False
 
         try:
@@ -542,7 +557,9 @@ def worker_loop(interval_seconds: int):
             traceback.print_exc()
             success = False
 
-        elapsed = time.time() - start
+        # Cycle completed (cleanup already done in run_once finally block)
+        cycle_count += 1
+        elapsed = time.time() - cycle_start
 
         if success:
             # Reset backoff on success
@@ -565,6 +582,27 @@ def worker_loop(interval_seconds: int):
             
             # Double backoff for next failure, cap at max_backoff
             backoff_seconds = min(backoff_seconds * 2, max_backoff)
+
+        # Check watchdog AFTER cycle completes and cleanup is done
+        uptime = time.time() - start_time
+        
+        # Watchdog: restart by uptime
+        if Config.WATCHDOG_RESTART_SECONDS > 0 and uptime >= Config.WATCHDOG_RESTART_SECONDS:
+            uptime_hours = uptime / 3600
+            print("=" * 60)
+            print(f"🛑 Watchdog: restarting process after {uptime_hours:.2f} hours uptime")
+            print(f"   Completed {cycle_count} cycles")
+            print("=" * 60)
+            os._exit(0)
+        
+        # Watchdog: restart by cycle count
+        if Config.WATCHDOG_MAX_CYCLES > 0 and cycle_count >= Config.WATCHDOG_MAX_CYCLES:
+            uptime_hours = uptime / 3600
+            print("=" * 60)
+            print(f"🛑 Watchdog: restarting process after {cycle_count} cycles")
+            print(f"   Uptime: {uptime_hours:.2f} hours")
+            print("=" * 60)
+            os._exit(0)
 
         print("=" * 60 + "\n")
         time.sleep(sleep_for)
