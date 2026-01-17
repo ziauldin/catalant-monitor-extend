@@ -3,13 +3,12 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# --- System deps ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget \
     curl \
     gnupg \
     ca-certificates \
     unzip \
+    wget \
     fonts-liberation \
     libasound2 \
     libatk-bridge2.0-0 \
@@ -45,7 +44,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xdg-utils \
   && rm -rf /var/lib/apt/lists/*
 
-# --- Install Google Chrome (NO apt-key) ---
+# ✅ Modern keyring method (works on Debian 12/13)
 RUN mkdir -p /etc/apt/keyrings \
   && curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
      | gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg \
@@ -55,7 +54,7 @@ RUN mkdir -p /etc/apt/keyrings \
   && apt-get install -y --no-install-recommends google-chrome-stable \
   && rm -rf /var/lib/apt/lists/*
 
-# --- Install ChromeDriver matching Chrome ---
+# Install ChromeDriver matching Chrome major version
 RUN CHROME_VERSION=$(google-chrome --version | awk '{print $3}') \
   && CHROME_MAJOR=$(echo $CHROME_VERSION | cut -d. -f1) \
   && echo "Chrome version: $CHROME_VERSION (major: $CHROME_MAJOR)" \
@@ -67,13 +66,9 @@ RUN CHROME_VERSION=$(google-chrome --version | awk '{print $3}') \
   && rm /tmp/chromedriver.zip \
   && chromedriver --version
 
-# --- App ---
 WORKDIR /app
-
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
-
 COPY . /app
 
-# Railway uses $PORT for web services; you are a worker, so just run python
 CMD ["python", "script_clean_single.py"]
