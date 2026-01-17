@@ -42,6 +42,10 @@ class Config:
     # If you ever want images enabled, set DISABLE_IMAGES=false
     DISABLE_IMAGES = os.getenv("DISABLE_IMAGES", "True").lower() == "true"
 
+    # Increase these if the site is slow in cloud
+    NAV_TIMEOUT_MS = int(os.getenv("NAV_TIMEOUT_MS", "45000"))
+    ACTION_TIMEOUT_MS = int(os.getenv("ACTION_TIMEOUT_MS", "45000"))
+
 
 def validate_env():
     missing = []
@@ -174,54 +178,102 @@ def filter_new_projects(all_projects, seen_projects):
 
 DASHBOARD_URL = "https://app.gocatalant.com/c/_/u/0/dashboard/"
 
+
 def _route_block_images(route, request):
     # Block images/media/fonts to reduce bandwidth & memory
     if request.resource_type in ("image", "media", "font"):
         return route.abort()
     return route.continue_()
 
+
 def is_logged_in(page) -> bool:
-    # This selector was used in your Selenium version
     return page.locator(".need-card-inline-name").count() > 0
 
-def perform_login(page) -> bool:
+
+def _safe_screenshot(page, name: str):
     try:
-        page.goto(DASHBOARD_URL, wait_until="domcontentloaded")
-        page.wait_for_timeout(2000)
+        page.screenshot(path=name, full_page=True)
+        print(f"🖼️ Saved screenshot: {name}")
+    except Exception:
+        pass
 
-        # Login form
-        page.wait_for_selector('input[name="email"]', timeout=20000)
-        page.fill('input[name="email"]', Config.CATALANT_EMAIL)
-        page.fill('input[name="password"]', Config.CATALANT_PASSWORD)
 
-        # Click submit (button text varies)
-        # Try common patterns
-        if page.locator('button:has-text("Login")').count() > 0:
-            page.click('button:has-text("Login")')
+def perform_login(page) -> bool:
+    """
+    Robust login that works when:
+    - email input is editable
+    - OR email input is readonly but already prefilled
+    - OR there is a Continue/Next step before password
+    """
+    try:
+        page.goto(DASHBOARD_URL, wait_until="domcontentloaded", timeout=Config.NAV_TIMEOUT_MS)
+        page.wait_for_timeout(1500)
+
+        email = page.locator('input[name="email"], #email-id').first
+        email.wait_for(timeout=Config.ACTION_TIMEOUT_MS)
+
+        # Read current value + readonly state
+        current_val = ""
+        try:
+            current_val = (email.input_value() or "").strip()
+        except Exception:
+            pass
+
+        is_readonly = bool(email.get_attribute("readonly"))
+
+        # Only set email if needed / possible
+        if (not is_readonly) or (current_val == ""):
+            email.click(force=True, timeout=Config.ACTION_TIMEOUT_MS)
+            page.keyboard.press("Control+A")
+            page.keyboard.type(Config.CATALANT_EMAIL, delay=25)
         else:
-            page.click('button[type="submit"]')
+            print(f"ℹ️ Email is readonly and already set to: {current_val}")
 
-        # Wait for dashboard cards
-        page.wait_for_selector(".need-card-inline-name", timeout=30000)
+        # If there is an email-first step
+        if page.locator('button:has-text("Continue")').count() > 0:
+            page.click('button:has-text("Continue")', timeout=Config.ACTION_TIMEOUT_MS)
+            page.wait_for_timeout(1200)
+        elif page.locator('button:has-text("Next")').count() > 0:
+            page.click('button:has-text("Next")', timeout=Config.ACTION_TIMEOUT_MS)
+            page.wait_for_timeout(1200)
+
+        # Wait for password field
+        password = page.locator('input[name="password"]').first
+        password.wait_for(timeout=Config.ACTION_TIMEOUT_MS)
+
+        password.click(force=True, timeout=Config.ACTION_TIMEOUT_MS)
+        page.keyboard.press("Control+A")
+        page.keyboard.type(Config.CATALANT_PASSWORD, delay=25)
+
+        # Submit
+        if page.locator('button:has-text("Login")').count() > 0:
+            page.click('button:has-text("Login")', timeout=Config.ACTION_TIMEOUT_MS)
+        else:
+            page.click('button[type="submit"]', timeout=Config.ACTION_TIMEOUT_MS)
+
+        # Confirm dashboard
+        page.wait_for_selector(".need-card-inline-name", timeout=Config.NAV_TIMEOUT_MS)
         print("✅ Login successful")
         return True
+
     except Exception as e:
+        _safe_screenshot(page, "login_failed.png")
         print(f"❌ Login failed: {e}")
         return False
+
 
 def setup_session(context, page) -> bool:
     """
     Uses storage_state if present; otherwise logs in and saves storage_state.
     """
     try:
-        page.goto(DASHBOARD_URL, wait_until="domcontentloaded")
-        page.wait_for_timeout(3000)
+        page.goto(DASHBOARD_URL, wait_until="domcontentloaded", timeout=Config.NAV_TIMEOUT_MS)
+        page.wait_for_timeout(2500)
 
         if is_logged_in(page):
             print("✅ Logged in via saved session (storage_state)")
             return True
 
-        # Not logged in → perform login
         ok = perform_login(page)
         if ok:
             try:
@@ -235,14 +287,13 @@ def setup_session(context, page) -> bool:
         print(f"❌ Session setup failed: {e}")
         return False
 
+
 def extract_project_data_from_card(card) -> dict | None:
     try:
-        # Title
         title = card.locator(".need-card-inline-name .line-clamp-2").first.inner_text().strip()
         if not title:
             return None
 
-        # Project ID (from data-ajax-post)
         project_id = None
         like_btn = card.locator("[data-ajax-post*='need/']").first
         if like_btn.count() > 0:
@@ -253,7 +304,6 @@ def extract_project_data_from_card(card) -> dict | None:
         if not project_id:
             return None
 
-        # Categories
         categories = []
         cat_loc = card.locator(".need-card-inline-pools .small.text-muted").first
         if cat_loc.count() > 0:
@@ -261,27 +311,22 @@ def extract_project_data_from_card(card) -> dict | None:
             if cat_text:
                 categories = [c.strip() for c in cat_text.split("|") if c.strip()]
 
-        # Description
         description = ""
         desc_loc = card.locator(".need-card-inline-details .line-clamp-2").first
         if desc_loc.count() > 0:
             description = desc_loc.inner_text().strip()
 
-        # Location
         location = ""
         loc_loc = card.locator(".text-gray-25.font-weight-semibold").first
         if loc_loc.count() > 0:
             location = (loc_loc.inner_text() or "").replace("Remote", "").strip()
 
-        # Time posted
         time_posted = "Unknown"
-        # similar xpath as selenium; use locator with text
         posted_loc = card.locator("span:has-text('Posted')").first
         if posted_loc.count() > 0:
             txt = posted_loc.inner_text().strip()
             time_posted = txt.replace("Posted", "").replace("ago", "").strip()
 
-        # Status
         status = "Posted"
         if card.locator(".badge-success").count() > 0:
             status = "New Project"
@@ -299,11 +344,11 @@ def extract_project_data_from_card(card) -> dict | None:
     except Exception:
         return None
 
+
 def scan_for_projects(page) -> list[dict]:
     try:
-        page.wait_for_selector(".need-card-inline-name", timeout=15000)
+        page.wait_for_selector(".need-card-inline-name", timeout=Config.NAV_TIMEOUT_MS)
 
-        # Similar to selenium: div.card-block which contains .need-card-inline
         cards = page.locator("div.card-block").all()
         projects = []
 
@@ -318,6 +363,7 @@ def scan_for_projects(page) -> list[dict]:
         return projects
 
     except PlaywrightTimeoutError:
+        _safe_screenshot(page, "projects_timeout.png")
         print("⏳ Timeout waiting for projects")
         return []
     except Exception as e:
@@ -350,6 +396,8 @@ def run_once():
             user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             viewport={"width": 1920, "height": 1080},
         )
+        context.set_default_timeout(Config.ACTION_TIMEOUT_MS)
+        context.set_default_navigation_timeout(Config.NAV_TIMEOUT_MS)
 
         if Config.DISABLE_IMAGES:
             context.route("**/*", _route_block_images)

@@ -1,8 +1,2 @@
-# Selenium for web automation
-selenium>=4.15.0
-
-# Environment variable management
-python-dotenv>=1.0.0
-
-# WebDriver manager for automatic driver setup
-webdriver-manager>=4.0.0
+playwright==1.49.0
+python-dotenv==1.0.1
