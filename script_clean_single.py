@@ -8,16 +8,8 @@ from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-
-from webdriver_manager.chrome import ChromeDriverManager
 from dotenv import load_dotenv
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 # Load environment variables (Railway will provide env vars; .env is for local)
 load_dotenv()
@@ -41,10 +33,14 @@ class Config:
 
     HEADLESS = os.getenv("HEADLESS", "True").lower() == "true"
 
-    COOKIES_FILE = os.getenv("COOKIES_FILE", "catalant_cookies.json")
-    PROJECTS_DB = os.getenv("PROJECTS_DB", "seen_projects.json")
+    # Playwright session state (recommended over raw cookies)
+    STORAGE_STATE_FILE = os.getenv("STORAGE_STATE_FILE", "catalant_state.json")
 
+    PROJECTS_DB = os.getenv("PROJECTS_DB", "seen_projects.json")
     CHECK_INTERVAL_SECONDS = int(os.getenv("CHECK_INTERVAL_SECONDS", "60"))
+
+    # If you ever want images enabled, set DISABLE_IMAGES=false
+    DISABLE_IMAGES = os.getenv("DISABLE_IMAGES", "True").lower() == "true"
 
 
 def validate_env():
@@ -67,224 +63,6 @@ def validate_env():
         print("👉 Add them in Railway > Variables")
         return False
     return True
-
-
-# ============================
-# SESSION MANAGEMENT
-# ============================
-
-def save_cookies(driver):
-    """Save session cookies to file"""
-    try:
-        with open(Config.COOKIES_FILE, "w") as f:
-            json.dump(driver.get_cookies(), f)
-        return True
-    except Exception as e:
-        print(f"⚠️ Could not save cookies: {e}")
-        return False
-
-
-def load_cookies(driver):
-    """Load cookies from file"""
-    if not os.path.exists(Config.COOKIES_FILE):
-        return False
-
-    try:
-        with open(Config.COOKIES_FILE, "r") as f:
-            cookies = json.load(f)
-
-        driver.get("https://app.gocatalant.com")
-        time.sleep(2)
-
-        driver.delete_all_cookies()
-
-        for cookie in cookies:
-            if "domain" in cookie and ".gocatalant.com" in cookie["domain"]:
-                driver.add_cookie(cookie)
-
-        return True
-    except Exception as e:
-        print(f"⚠️ Could not load cookies: {e}")
-        return False
-
-
-def perform_login(driver):
-    """Perform login to Catalant"""
-    try:
-        driver.get("https://app.gocatalant.com/c/_/u/0/dashboard/")
-        time.sleep(3)
-
-        WebDriverWait(driver, 20).until(
-            EC.presence_of_element_located((By.NAME, "email"))
-        )
-
-        driver.find_element(By.NAME, "email").send_keys(Config.CATALANT_EMAIL)
-        driver.find_element(By.NAME, "password").send_keys(Config.CATALANT_PASSWORD)
-
-        driver.find_element(
-            By.XPATH, "//button[contains(text(), 'Login') or @type='submit']"
-        ).click()
-
-        WebDriverWait(driver, 30).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, ".need-card-inline-name"))
-        )
-
-        save_cookies(driver)
-        print("✅ Login successful")
-        return True
-
-    except Exception as e:
-        print(f"❌ Login failed: {e}")
-        return False
-
-
-def setup_session(driver):
-    """Setup browser session with cookies or login"""
-    if load_cookies(driver):
-        driver.get("https://app.gocatalant.com/c/_/u/0/dashboard/")
-        time.sleep(5)
-        try:
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, ".need-card-inline-name"))
-            )
-            print("✅ Logged in via cookies")
-            return True
-        except Exception:
-            pass
-
-    return perform_login(driver)
-
-
-# ============================
-# PROJECT EXTRACTION
-# ============================
-
-def extract_project_data(card):
-    """Extract data from a project card - returns None if invalid"""
-    try:
-        title_elem = card.find_element(By.CSS_SELECTOR, ".need-card-inline-name .line-clamp-2")
-        title = title_elem.text.strip()
-        if not title:
-            return None
-
-        # Project ID
-        try:
-            like_button = card.find_element(By.CSS_SELECTOR, "[data-ajax-post*='need/']")
-            match = re.search(r"/need/([^/]+)/", like_button.get_attribute("data-ajax-post"))
-            if not match:
-                return None
-            project_id = match.group(1)
-        except Exception:
-            return None
-
-        categories = []
-        try:
-            cat_text = card.find_element(
-                By.CSS_SELECTOR, ".need-card-inline-pools .small.text-muted"
-            ).text.strip()
-            categories = [c.strip() for c in cat_text.split("|") if c.strip()]
-        except Exception:
-            pass
-
-        description = ""
-        try:
-            description = card.find_element(
-                By.CSS_SELECTOR, ".need-card-inline-details .line-clamp-2"
-            ).text.strip()
-        except Exception:
-            pass
-
-        location = ""
-        try:
-            loc_text = card.find_element(By.CSS_SELECTOR, ".text-gray-25.font-weight-semibold").text
-            location = loc_text.replace("Remote", "").strip()
-        except Exception:
-            pass
-
-        time_posted = "Unknown"
-        try:
-            time_elems = card.find_elements(
-                By.XPATH,
-                ".//div[contains(@class, 'small') and contains(@class, 'text-gray-20') and contains(@class, 'mt-1')]//span[contains(text(), 'Posted')]"
-            )
-            if time_elems:
-                time_posted = time_elems[0].text.replace("Posted", "").replace("ago", "").strip()
-        except Exception:
-            pass
-
-        status = "Posted"
-        try:
-            card.find_element(By.CSS_SELECTOR, ".badge-success")
-            status = "New Project"
-        except Exception:
-            pass
-
-        return {
-            "id": project_id,
-            "title": title,
-            "categories": categories,
-            "description": description,
-            "location": location,
-            "time_posted": time_posted,
-            "status": status,
-            "detected_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-    except Exception:
-        return None
-
-
-def scan_for_projects(driver):
-    """Scan dashboard for project cards - returns only valid projects"""
-    try:
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, ".need-card-inline-name"))
-        )
-
-        all_cards = driver.find_elements(By.CSS_SELECTOR, "div.card-block")
-        project_cards = [c for c in all_cards if c.find_elements(By.CSS_SELECTOR, ".need-card-inline")]
-
-        projects = []
-        for card in project_cards:
-            project = extract_project_data(card)
-            if project and project.get("title") and project.get("id"):
-                projects.append(project)
-
-        print(f"✅ Extracted {len(projects)} valid projects")
-        return projects
-
-    except TimeoutException:
-        print("⏳ Timeout waiting for projects")
-        return []
-    except Exception as e:
-        print(f"❌ Error scanning: {e}")
-        return []
-
-
-# ============================
-# PROJECT DATABASE
-# ============================
-
-def load_seen_projects():
-    if not os.path.exists(Config.PROJECTS_DB):
-        return []
-    try:
-        with open(Config.PROJECTS_DB, "r") as f:
-            return json.load(f)
-    except Exception:
-        return []
-
-
-def save_seen_projects(projects):
-    try:
-        with open(Config.PROJECTS_DB, "w") as f:
-            json.dump(projects, f, indent=2)
-    except Exception as e:
-        print(f"⚠️ Failed to save projects: {e}")
-
-
-def filter_new_projects(all_projects, seen_projects):
-    seen_ids = {p.get("id") for p in seen_projects if p.get("id")}
-    return [p for p in all_projects if p.get("id") and p["id"] not in seen_ids]
 
 
 # ============================
@@ -364,142 +142,263 @@ def send_notification(project):
 
 
 # ============================
-# DRIVER INITIALIZATION
+# PROJECT DATABASE
 # ============================
 
-def initialize_driver():
-    """Initialize Chrome WebDriver with Railway/container support (no chromedriver log file)"""
-    options = Options()
-
-    if Config.HEADLESS:
-        # Prefer new headless where available
-        options.add_argument("--headless=new")
-
-    # Critical container flags
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--disable-software-rasterizer")
-    options.add_argument("--disable-extensions")
-    options.add_argument("--window-size=1920,1080")
-
-    # Keep it lightweight
-    options.add_argument("--no-first-run")
-    options.add_argument("--no-default-browser-check")
-    options.add_argument("--disable-background-networking")
-    options.add_argument("--disable-sync")
-    options.add_argument("--mute-audio")
-
-    # User agent
-    options.add_argument(
-        "user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    )
-
-    # Preferences (disable notifications + images)
-    prefs = {
-        "profile.default_content_setting_values.notifications": 2,
-        "profile.managed_default_content_settings.images": 2
-    }
-    options.add_experimental_option("prefs", prefs)
-    options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
-    options.add_experimental_option("useAutomationExtension", False)
-
-    chromedriver_path = None
-    chrome_binary = None
-
-    if os.path.exists("/usr/bin/chromedriver"):
-        chromedriver_path = "/usr/bin/chromedriver"
-        print(f"✅ Using container chromedriver: {chromedriver_path}")
-
-    # Prefer google-chrome if present
-    if os.path.exists("/usr/bin/google-chrome-stable"):
-        chrome_binary = "/usr/bin/google-chrome-stable"
-        print(f"✅ Chrome binary: {chrome_binary}")
-    elif os.path.exists("/usr/bin/google-chrome"):
-        chrome_binary = "/usr/bin/google-chrome"
-        print(f"✅ Chrome binary: {chrome_binary}")
-    else:
-        print("⚠️ Google Chrome not found, using webdriver-manager default browser")
-
-    if chrome_binary:
-        options.binary_location = chrome_binary
-
-    # IMPORTANT: remove verbose + log-path (prevents /tmp log growth on Railway)
-    if chromedriver_path:
-        service = Service(chromedriver_path)
-    else:
-        print("✅ Using webdriver-manager for chromedriver")
-        service = Service(ChromeDriverManager().install())
-
-    print("🚀 Initializing Chrome driver...")
-    driver = webdriver.Chrome(service=service, options=options)
-    print("✅ Chrome driver initialized successfully")
-
-    # Light anti-detection tweak (safe)
+def load_seen_projects():
+    if not os.path.exists(Config.PROJECTS_DB):
+        return []
     try:
-        driver.execute_cdp_cmd("Network.setUserAgentOverride", {
-            "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        })
+        with open(Config.PROJECTS_DB, "r") as f:
+            return json.load(f)
     except Exception:
-        pass
+        return []
 
-    return driver
+
+def save_seen_projects(projects):
+    try:
+        with open(Config.PROJECTS_DB, "w") as f:
+            json.dump(projects, f, indent=2)
+    except Exception as e:
+        print(f"⚠️ Failed to save projects: {e}")
+
+
+def filter_new_projects(all_projects, seen_projects):
+    seen_ids = {p.get("id") for p in seen_projects if p.get("id")}
+    return [p for p in all_projects if p.get("id") and p["id"] not in seen_ids]
 
 
 # ============================
-# SINGLE CYCLE
+# PLAYWRIGHT: SESSION + SCRAPE
 # ============================
+
+DASHBOARD_URL = "https://app.gocatalant.com/c/_/u/0/dashboard/"
+
+def _route_block_images(route, request):
+    # Block images/media/fonts to reduce bandwidth & memory
+    if request.resource_type in ("image", "media", "font"):
+        return route.abort()
+    return route.continue_()
+
+def is_logged_in(page) -> bool:
+    # This selector was used in your Selenium version
+    return page.locator(".need-card-inline-name").count() > 0
+
+def perform_login(page) -> bool:
+    try:
+        page.goto(DASHBOARD_URL, wait_until="domcontentloaded")
+        page.wait_for_timeout(2000)
+
+        # Login form
+        page.wait_for_selector('input[name="email"]', timeout=20000)
+        page.fill('input[name="email"]', Config.CATALANT_EMAIL)
+        page.fill('input[name="password"]', Config.CATALANT_PASSWORD)
+
+        # Click submit (button text varies)
+        # Try common patterns
+        if page.locator('button:has-text("Login")').count() > 0:
+            page.click('button:has-text("Login")')
+        else:
+            page.click('button[type="submit"]')
+
+        # Wait for dashboard cards
+        page.wait_for_selector(".need-card-inline-name", timeout=30000)
+        print("✅ Login successful")
+        return True
+    except Exception as e:
+        print(f"❌ Login failed: {e}")
+        return False
+
+def setup_session(context, page) -> bool:
+    """
+    Uses storage_state if present; otherwise logs in and saves storage_state.
+    """
+    try:
+        page.goto(DASHBOARD_URL, wait_until="domcontentloaded")
+        page.wait_for_timeout(3000)
+
+        if is_logged_in(page):
+            print("✅ Logged in via saved session (storage_state)")
+            return True
+
+        # Not logged in → perform login
+        ok = perform_login(page)
+        if ok:
+            try:
+                context.storage_state(path=Config.STORAGE_STATE_FILE)
+                print(f"✅ Saved session state: {Config.STORAGE_STATE_FILE}")
+            except Exception as e:
+                print(f"⚠️ Could not save storage_state: {e}")
+        return ok
+
+    except Exception as e:
+        print(f"❌ Session setup failed: {e}")
+        return False
+
+def extract_project_data_from_card(card) -> dict | None:
+    try:
+        # Title
+        title = card.locator(".need-card-inline-name .line-clamp-2").first.inner_text().strip()
+        if not title:
+            return None
+
+        # Project ID (from data-ajax-post)
+        project_id = None
+        like_btn = card.locator("[data-ajax-post*='need/']").first
+        if like_btn.count() > 0:
+            ajax = like_btn.get_attribute("data-ajax-post") or ""
+            m = re.search(r"/need/([^/]+)/", ajax)
+            if m:
+                project_id = m.group(1)
+        if not project_id:
+            return None
+
+        # Categories
+        categories = []
+        cat_loc = card.locator(".need-card-inline-pools .small.text-muted").first
+        if cat_loc.count() > 0:
+            cat_text = cat_loc.inner_text().strip()
+            if cat_text:
+                categories = [c.strip() for c in cat_text.split("|") if c.strip()]
+
+        # Description
+        description = ""
+        desc_loc = card.locator(".need-card-inline-details .line-clamp-2").first
+        if desc_loc.count() > 0:
+            description = desc_loc.inner_text().strip()
+
+        # Location
+        location = ""
+        loc_loc = card.locator(".text-gray-25.font-weight-semibold").first
+        if loc_loc.count() > 0:
+            location = (loc_loc.inner_text() or "").replace("Remote", "").strip()
+
+        # Time posted
+        time_posted = "Unknown"
+        # similar xpath as selenium; use locator with text
+        posted_loc = card.locator("span:has-text('Posted')").first
+        if posted_loc.count() > 0:
+            txt = posted_loc.inner_text().strip()
+            time_posted = txt.replace("Posted", "").replace("ago", "").strip()
+
+        # Status
+        status = "Posted"
+        if card.locator(".badge-success").count() > 0:
+            status = "New Project"
+
+        return {
+            "id": project_id,
+            "title": title,
+            "categories": categories,
+            "description": description,
+            "location": location,
+            "time_posted": time_posted,
+            "status": status,
+            "detected_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+    except Exception:
+        return None
+
+def scan_for_projects(page) -> list[dict]:
+    try:
+        page.wait_for_selector(".need-card-inline-name", timeout=15000)
+
+        # Similar to selenium: div.card-block which contains .need-card-inline
+        cards = page.locator("div.card-block").all()
+        projects = []
+
+        for card in cards:
+            if card.locator(".need-card-inline").count() == 0:
+                continue
+            proj = extract_project_data_from_card(card)
+            if proj and proj.get("id") and proj.get("title"):
+                projects.append(proj)
+
+        print(f"✅ Extracted {len(projects)} valid projects")
+        return projects
+
+    except PlaywrightTimeoutError:
+        print("⏳ Timeout waiting for projects")
+        return []
+    except Exception as e:
+        print(f"❌ Error scanning: {e}")
+        return []
+
 
 def run_once():
     print("=" * 60)
     print(f"🔄 Cycle started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
 
-    driver = initialize_driver()
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=Config.HEADLESS,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-extensions",
+                "--window-size=1920,1080",
+            ],
+        )
 
-    try:
-        if not setup_session(driver):
-            print("❌ Failed to establish session")
-            return
+        # Load storage state if present (keeps you logged in across restarts)
+        storage_state = Config.STORAGE_STATE_FILE if os.path.exists(Config.STORAGE_STATE_FILE) else None
 
-        seen_projects = load_seen_projects()
-        print(f"📁 Loaded {len(seen_projects)} seen projects")
+        context = browser.new_context(
+            storage_state=storage_state,
+            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            viewport={"width": 1920, "height": 1080},
+        )
 
-        all_projects = scan_for_projects(driver)
-        if not all_projects:
-            print("⚠️ No projects found (or page didn't load)")
-            return
+        if Config.DISABLE_IMAGES:
+            context.route("**/*", _route_block_images)
 
-        new_projects = filter_new_projects(all_projects, seen_projects)
+        page = context.new_page()
 
-        if new_projects:
-            print(f"🎯 Found {len(new_projects)} NEW project(s)!")
-            for project in new_projects:
-                print(f"  → {project['title'][:90]}...")
-                send_notification(project)
-                seen_projects.append(project)
-
-            save_seen_projects(seen_projects)
-            print("✅ Updated seen_projects.json")
-        else:
-            print("⏳ No new projects")
-
-        print(f"📊 Stats: {len(all_projects)} total, {len(seen_projects)} tracked")
-
-    finally:
         try:
-            driver.quit()
-        except Exception:
-            pass
-        print("✅ Browser closed")
+            if not setup_session(context, page):
+                print("❌ Failed to establish session")
+                return
 
+            seen_projects = load_seen_projects()
+            print(f"📁 Loaded {len(seen_projects)} seen projects")
 
-# ============================
-# WORKER LOOP (every N seconds)
-# ============================
+            all_projects = scan_for_projects(page)
+            if not all_projects:
+                print("⚠️ No projects found (or page didn't load)")
+                return
+
+            new_projects = filter_new_projects(all_projects, seen_projects)
+
+            if new_projects:
+                print(f"🎯 Found {len(new_projects)} NEW project(s)!")
+                for project in new_projects:
+                    print(f"  → {project['title'][:90]}...")
+                    send_notification(project)
+                    seen_projects.append(project)
+
+                save_seen_projects(seen_projects)
+                print("✅ Updated seen_projects.json")
+            else:
+                print("⏳ No new projects")
+
+            print(f"📊 Stats: {len(all_projects)} total, {len(seen_projects)} tracked")
+
+        finally:
+            try:
+                context.close()
+            except Exception:
+                pass
+            try:
+                browser.close()
+            except Exception:
+                pass
+            print("✅ Browser closed")
+
 
 def worker_loop(interval_seconds: int):
-    print("🟢 Worker started")
+    print("🟢 Worker started (Playwright)")
     print(f"⏱️ Interval: {interval_seconds}s")
 
     while True:
