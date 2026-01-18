@@ -593,7 +593,7 @@ def worker_loop(interval_seconds: int):
             print(f"🛑 Watchdog: restarting process after {uptime_hours:.2f} hours uptime")
             print(f"   Completed {cycle_count} cycles")
             print("=" * 60)
-            os._exit(0)
+            os._exit(1)
         
         # Watchdog: restart by cycle count
         if Config.WATCHDOG_MAX_CYCLES > 0 and cycle_count >= Config.WATCHDOG_MAX_CYCLES:
@@ -602,7 +602,7 @@ def worker_loop(interval_seconds: int):
             print(f"🛑 Watchdog: restarting process after {cycle_count} cycles")
             print(f"   Uptime: {uptime_hours:.2f} hours")
             print("=" * 60)
-            os._exit(0)
+            os._exit(1)
 
         print("=" * 60 + "\n")
         time.sleep(sleep_for)
