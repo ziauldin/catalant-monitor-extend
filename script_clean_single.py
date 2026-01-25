@@ -14,7 +14,6 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 # Load environment variables (Railway will provide env vars; .env is for local)
 load_dotenv()
 
-
 # ============================
 # CONFIGURATION
 # ============================
@@ -45,8 +44,8 @@ class Config:
     DISABLE_IMAGES = os.getenv("DISABLE_IMAGES", "True").lower() == "true"
 
     # Increase these for cloud stability - higher defaults for Railway
-    NAV_TIMEOUT_MS = int(os.getenv("NAV_TIMEOUT_MS", "90000"))
-    ACTION_TIMEOUT_MS = int(os.getenv("ACTION_TIMEOUT_MS", "60000"))
+    NAV_TIMEOUT_MS = int(os.getenv("NAV_TIMEOUT_MS", "120000"))  # Increased timeout
+    ACTION_TIMEOUT_MS = int(os.getenv("ACTION_TIMEOUT_MS", "90000"))  # Increased timeout
 
     # Watchdog: planned restart to prevent long-running Railway memory issues
     WATCHDOG_RESTART_SECONDS = int(os.getenv("WATCHDOG_RESTART_SECONDS", "14400"))  # 4 hours
@@ -351,7 +350,7 @@ def extract_project_data_from_card(card) -> dict | None:
         if cat_loc.count() > 0:
             cat_text = cat_loc.inner_text().strip()
             if cat_text:
-                categories = [c.strip() for c in cat_text.split("|") if c.strip()]
+                categories = [c.strip() for c in cat_text.split("|") if c.strip()] 
 
         description = ""
         desc_loc = card.locator(".need-card-inline-details .line-clamp-2").first
@@ -470,7 +469,7 @@ def run_once() -> bool:
             new_projects = filter_new_projects(all_projects, seen_projects)
 
             if new_projects:
-                print(f"🎯 Found {len(new_projects)} NEW project(s)!")
+                print(f"🎯 Found {len(new_projects)} NEW project(s)!") 
                 for project in new_projects:
                     print(f"  → {project['title'][:90]}...")
                     send_notification(project)
@@ -579,8 +578,6 @@ def worker_loop(interval_seconds: int):
             print(f"⚠️ Failure #{consecutive_failures}, backing off for {backoff_minutes:.1f} minutes")
             
             sleep_for = backoff_seconds
-            
-            # Double backoff for next failure, cap at max_backoff
             backoff_seconds = min(backoff_seconds * 2, max_backoff)
 
         # Check watchdog AFTER cycle completes and cleanup is done
